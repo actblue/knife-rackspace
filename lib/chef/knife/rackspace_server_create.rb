@@ -517,6 +517,7 @@ class Chef
           exit 1
         end
 
+        msg_pair("Wall clock at start", Time.now.to_s)
         if locate_config_value(:bootstrap_protocol) == 'winrm'
           print "\n#{ui.color("Waiting for winrm", :magenta)}"
           print(".") until tcp_test_winrm(bootstrap_ip_address, locate_config_value(:winrm_port))
@@ -527,6 +528,7 @@ class Chef
           sleep @initial_sleep_delay ||= 10
           bootstrap_for_node(server, bootstrap_ip_address).run
         end
+        msg_pair("Wall clock at end", Time.now.to_s)
 
         puts "\n"
         msg_pair("Instance ID", server.id)
