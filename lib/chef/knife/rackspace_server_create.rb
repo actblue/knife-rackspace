@@ -109,6 +109,11 @@ class Chef
         :long => "--identity-file IDENTITY_FILE",
         :description => "The SSH identity file used for authentication"
 
+      option :forward_agent,
+        :long => "--forward-agent",
+        :description => "Enable SSH agent forwarding",
+        :boolean => true
+
       option :prerelease,
         :long => "--prerelease",
         :description => "Install the pre-release chef gems",
@@ -583,6 +588,7 @@ class Chef
         bootstrap.config[:ssh_password] = server.password
         bootstrap.config[:ssh_port] = locate_config_value(:ssh_port)
         bootstrap.config[:identity_file] = locate_config_value(:identity_file)
+        bootstrap.config[:forward_agent] = locate_config_value(:forward_agent)
         bootstrap.config[:host_key_verify] = locate_config_value(:host_key_verify)
         bootstrap.config[:bootstrap_vault_file] = locate_config_value(:bootstrap_vault_file) if locate_config_value(:bootstrap_vault_file)
         bootstrap.config[:bootstrap_vault_json] = locate_config_value(:bootstrap_vault_json) if locate_config_value(:bootstrap_vault_json)
