@@ -503,8 +503,7 @@ class Chef
         end
 
         msg_pair("Public DNS Name", public_dns_name(server))
-        msg_pair("Public IP Address", ip_address(server, "public"))
-        msg_pair("Private IP Address", ip_address(server, "private"))
+        msg_pair("IP Addresses", server.addresses.keys.map {|network| ip_address(server, network) }.join(','))
         msg_pair("Password", server.password)
         msg_pair("Metadata", server.metadata.all)
 
@@ -535,8 +534,7 @@ class Chef
         msg_pair("Boot Image ID", server.boot_image_id) if server.boot_image_id
         msg_pair("Metadata", server.metadata)
         msg_pair("Public DNS Name", public_dns_name(server))
-        msg_pair("Public IP Address", ip_address(server, "public"))
-        msg_pair("Private IP Address", ip_address(server, "private"))
+        msg_pair("IP Addresses", server.addresses.keys.map {|network| ip_address(server, network) }.join(','))
         msg_pair("Password", server.password)
         msg_pair("Environment", config[:environment] || "_default")
         msg_pair("Run List", config[:run_list].join(", "))
