@@ -34,6 +34,8 @@ class Chef
         require "chef/json_compat"
         require "chef/knife/bootstrap"
         Chef::Knife::Bootstrap.load_deps
+        require 'chef/knife/ssh'
+        require 'chef/mixin/command'
       end
 
       banner "knife rackspace server create (options)"
@@ -185,8 +187,8 @@ class Chef
         :boolean => true,
         :default => true
 
-      option :tcp_test_ssh,
-        :long => "--[no-]tcp-test-ssh",
+      option :ssh_test_ssh,
+        :long => "--[no-]ssh-test-ssh",
         :description => "Check that SSH is available using a TCP check directly on port 22, enabled by default",
         :boolean => true,
         :default => true
@@ -294,29 +296,37 @@ class Chef
         require "chef/knife/core/windows_bootstrap_context"
       end
 
-      def tcp_test_ssh(server, bootstrap_ip)
-        return true unless locate_config_value(:tcp_test_ssh) != nil
+      # TODO: have this limit like tcp_test_ssh
+      def ssh_test_ssh(server, bootstrap_ip_address)
+        return true unless locate_config_value(:ssh_test_ssh) != nil
 
-        limit = locate_config_value(:retry_ssh_limit).to_i
-        count = 0
-
+        sleep config[:ssh_wait_timeout].to_i
         begin
-          Net::SSH.start(bootstrap_ip, "root", :password => server.password ) do |ssh|
-            Chef::Log.debug("sshd accepting connections on #{bootstrap_ip}")
-            break
-          end
-        rescue
-          count += 1
-
-          if count <= limit
-            print "."
-            sleep locate_config_value(:retry_ssh_every).to_i
-            tcp_test_ssh(server, bootstrap_ip)
-          else
-            ui.error "Unable to SSH into #{bootstrap_ip}"
-            exit 1
+          timeout 5 do
+            ssh = Chef::Knife::Ssh.new
+            ssh.ui = ui
+            ssh.name_args = [bootstrap_ip_address, 'true']
+            ssh.config[:ssh_user] = config[:ssh_user] || "root"
+            ssh.config[:ssh_password] = server.password
+            ssh.config[:ssh_port] = Chef::Config[:knife][:ssh_port] || config[:ssh_port]
+            ssh.config[:identity_file] = config[:identity_file]
+            ssh.config[:manual] = true
+            ssh.config[:host_key_verify] = config[:host_key_verify]
+            ssh.config[:on_error] = :raise
+            ssh.run
+            true
           end
         end
+      rescue Timeout::Error, Errno::ETIMEDOUT
+        false
+      rescue Errno::EPERM
+        false
+      rescue Net::SSH::Disconnect, Errno::ECONNREFUSED, EOFError
+        sleep 2
+        false
+      rescue Errno::EHOSTUNREACH
+        sleep 2
+        false
       end
 
       def parse_file_argument(arg)
@@ -522,7 +532,8 @@ class Chef
           bootstrap_for_windows_node(server, bootstrap_ip_address).run
         else
           print "\n#{ui.color("Waiting for sshd", :magenta)}"
-          tcp_test_ssh(server, bootstrap_ip_address)
+          print(".") until ssh_test_ssh(server, bootstrap_ip_address)
+          sleep @initial_sleep_delay ||= 10
           bootstrap_for_node(server, bootstrap_ip_address).run
         end
 
