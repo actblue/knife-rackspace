@@ -35,6 +35,8 @@ class Chef
         require 'chef/json_compat'
         require 'chef/knife/bootstrap'
         Chef::Knife::Bootstrap.load_deps
+        require 'chef/knife/ssh'
+        require 'chef/mixin/command'
       end
 
       banner "knife rackspace server create (options)"
@@ -103,6 +105,11 @@ class Chef
         :short => "-i IDENTITY_FILE",
         :long => "--identity-file IDENTITY_FILE",
         :description => "The SSH identity file used for authentication"
+
+      option :forward_agent,
+        :long => "--forward-agent",
+        :description => "Enable SSH agent forwarding",
+        :boolean => true
 
       option :prerelease,
         :long => "--prerelease",
@@ -180,8 +187,8 @@ class Chef
         :boolean => true,
         :default => true
 
-      option :tcp_test_ssh,
-        :long => "--[no-]tcp-test-ssh",
+      option :ssh_test_ssh,
+        :long => "--[no-]ssh-test-ssh",
         :description => "Check that SSH is available using a TCP check directly on port 22, enabled by default",
         :boolean => true,
         :default => true
@@ -285,29 +292,37 @@ class Chef
         require 'chef/knife/winrm'
       end
 
-      def tcp_test_ssh(server, bootstrap_ip)
-        return true unless locate_config_value(:tcp_test_ssh) != nil
+      # TODO: have this limit like tcp_test_ssh
+      def ssh_test_ssh(server, bootstrap_ip_address)
+        return true unless locate_config_value(:ssh_test_ssh) != nil
 
-        limit = locate_config_value(:retry_ssh_limit).to_i
-        count = 0
-
+        sleep config[:ssh_wait_timeout].to_i
         begin
-          Net::SSH.start(bootstrap_ip, 'root', :password => server.password ) do |ssh|
-            Chef::Log.debug("sshd accepting connections on #{bootstrap_ip}")
-            break
-          end
-        rescue
-          count += 1
-
-          if count <= limit
-            print '.'
-            sleep locate_config_value(:retry_ssh_every).to_i
-            tcp_test_ssh(server, bootstrap_ip)
-          else
-            ui.error "Unable to SSH into #{bootstrap_ip}"
-            exit 1
+          timeout 5 do
+            ssh = Chef::Knife::Ssh.new
+            ssh.ui = ui
+            ssh.name_args = [bootstrap_ip_address, 'true']
+            ssh.config[:ssh_user] = config[:ssh_user] || "root"
+            ssh.config[:ssh_password] = server.password
+            ssh.config[:ssh_port] = Chef::Config[:knife][:ssh_port] || config[:ssh_port]
+            ssh.config[:identity_file] = config[:identity_file]
+            ssh.config[:manual] = true
+            ssh.config[:host_key_verify] = config[:host_key_verify]
+            ssh.config[:on_error] = :raise
+            ssh.run
+            true
           end
         end
+      rescue Timeout::Error, Errno::ETIMEDOUT
+        false
+      rescue Errno::EPERM
+        false
+      rescue Net::SSH::Disconnect, Errno::ECONNREFUSED, EOFError
+        sleep 2
+        false
+      rescue Errno::EHOSTUNREACH
+        sleep 2
+        false
       end
 
       def parse_file_argument(arg)
@@ -494,8 +509,7 @@ class Chef
         end
 
         msg_pair("Public DNS Name", public_dns_name(server))
-        msg_pair("Public IP Address", ip_address(server, 'public'))
-        msg_pair("Private IP Address", ip_address(server, 'private'))
+        msg_pair("IP Addresses", server.addresses.keys.map {|network| ip_address(server, network) }.join(','))
         msg_pair("Password", server.password)
         msg_pair("Metadata", server.metadata.all)
 
@@ -507,15 +521,18 @@ class Chef
           exit 1
         end
 
+        msg_pair("Wall clock at start", Time.now.to_s)
         if locate_config_value(:bootstrap_protocol) == 'winrm'
           print "\n#{ui.color("Waiting for winrm", :magenta)}"
           print(".") until tcp_test_winrm(bootstrap_ip_address, locate_config_value(:winrm_port))
           bootstrap_for_windows_node(server, bootstrap_ip_address).run
         else
           print "\n#{ui.color("Waiting for sshd", :magenta)}"
-          tcp_test_ssh(server, bootstrap_ip_address)
+          print(".") until ssh_test_ssh(server, bootstrap_ip_address)
+          sleep @initial_sleep_delay ||= 10
           bootstrap_for_node(server, bootstrap_ip_address).run
         end
+        msg_pair("Wall clock at end", Time.now.to_s)
 
         puts "\n"
         msg_pair("Instance ID", server.id)
@@ -526,8 +543,7 @@ class Chef
         msg_pair("Boot Image ID", server.boot_image_id) if server.boot_image_id
         msg_pair("Metadata", server.metadata)
         msg_pair("Public DNS Name", public_dns_name(server))
-        msg_pair("Public IP Address", ip_address(server, 'public'))
-        msg_pair("Private IP Address", ip_address(server, 'private'))
+        msg_pair("IP Addresses", server.addresses.keys.map {|network| ip_address(server, network) }.join(','))
         msg_pair("Password", server.password)
         msg_pair("Environment", config[:environment] || '_default')
         msg_pair("Run List", config[:run_list].join(', '))
@@ -574,6 +590,7 @@ class Chef
         bootstrap.config[:ssh_password] = server.password
         bootstrap.config[:ssh_port] = locate_config_value(:ssh_port)
         bootstrap.config[:identity_file] = locate_config_value(:identity_file)
+        bootstrap.config[:forward_agent] = locate_config_value(:forward_agent)
         bootstrap.config[:host_key_verify] = locate_config_value(:host_key_verify)
         bootstrap.config[:bootstrap_vault_file] = locate_config_value(:bootstrap_vault_file) if locate_config_value(:bootstrap_vault_file)
         bootstrap.config[:bootstrap_vault_json] = locate_config_value(:bootstrap_vault_json) if locate_config_value(:bootstrap_vault_json)
